@@ -73,33 +73,35 @@ def ParsePrompt(prompt):
     return result_prompt
 
 
-class Function:
-    def __init__(self, funct):
-        self.funct = funct
+def ParseFunctionParameters(function_text, parameters):
+    result_function_text = function_text
+    for i in range(len(parameters)):
+        j = 0
+        while j < len(result_function_text):
+            if result_function_text[j:j+len(parameters[i])] == parameters[i] and IsCorrectName(j, parameters[i], result_function_text):
+                replacement_text = f"args[{i}]"
+                result_function_text = result_function_text[:j] + replacement_text + result_function_text[j+len(parameters[i]):]
+                j += len(replacement_text) - len(parameters[i])
+            j += 1
+    return result_function_text
 
-    def __call__(self, *x):
-        return eval(ParsePrompt(self.funct))
+
+class Function:
+    def __init__(self, funct, args=None):
+        if args is None:
+            args = []
+
+        self.funct = funct
+        self.args = args
+
+    def __call__(self, *args):
+        return eval(ParsePrompt(ParseFunctionParameters(self.funct, self.args)))
 
     def __repr__(self):
-        return f"Function(\"{self.funct}\")"
+        return f"Function(\"{self.funct}\", {self.args})"
 
     def __str__(self):
-        return f"f(x) = {self.funct}"
-
-    def __add__(self, other):
-        return Function(f"{self.funct} + {other.funct}")
-
-    def __sub__(self, other):
-        return Function(f"{self.funct} - ({other.funct})")
-
-    def __mul__(self, other):
-        return Function(f"({self.funct}) * ({other.funct})")
-
-    def __truediv__(self, other):
-        return Function(f"({self.funct}) / ({other.funct})")
-
-    def composite(self, other):
-        return Function(self.funct.replace("x", f"({other.funct})"))
+        return f"f({', '.join(self.args)}) = {self.funct}"
 
 
 class ObjectFunctionHelper:
@@ -148,9 +150,9 @@ class Object:
         functions_copy = {}
         static_functions_copy = {}
         for key in self.functions.keys():
-            functions_copy[key] = Function(self.functions[key].funct.replace('"', '\\"'))
+            functions_copy[key] = Function(self.functions[key].funct.replace('"', '\\"'), self.functions[key].args)
         for key in self.static_functions.keys():
-            static_functions_copy[key] = Function(self.static_functions[key].funct.replace('"', '\\"'))
+            static_functions_copy[key] = Function(self.static_functions[key].funct.replace('"', '\\"'), self.static_functions[key].args)
         return f"Object(\"{self.name}\", {self.variables}, {functions_copy}, {self.static_variables}, {static_functions_copy})"
 
     def __str__(self):
@@ -174,9 +176,9 @@ class Object:
 
     def API(self):
         api_variables = " -" + ", ".join(self.variables)
-        api_functions = "\n".join([f" -{f} = {self.functions[f].funct}" for f in self.functions.keys()])
+        api_functions = "\n".join([f" -{f}({', '.join(self.functions[f].args)}) = {self.functions[f].funct}" for f in self.functions.keys()])
         api_static_variables = "\n".join([f" -{v} = {self.static_variables[v]}" for v in self.static_variables.keys()])
-        api_static_functions = "\n".join([f" -{f} = {self.static_functions[f].funct}" for f in self.static_functions.keys()])
+        api_static_functions = "\n".join([f" -{f}({', '.join(self.static_functions[f].args)}) = {self.static_functions[f].funct}" for f in self.static_functions.keys()])
         return f"{self.name} API:" + (f"\nVariables:\n{api_variables}" if len(self.variables) > 0 else "") + (f"\nFunctions:\n{api_functions}" if len(self.functions) > 0 else "") + (f"\nStatic Variables:\n{api_static_variables}" if len(self.static_variables) > 0 else "") + (f"\nStatic Functions:\n{api_static_functions}" if len(self.static_functions) > 0 else "")
 
 
@@ -319,19 +321,6 @@ if os.path.isfile("variables.txt"):
     LoadData(variables, "variables.txt")
 
 
-def ParseFunctionParameters(function_text, parameters):
-    result_function_text = function_text
-    for i in range(len(parameters)):
-        j = 0
-        while j < len(result_function_text):
-            if result_function_text[j:j+len(parameters[i])] == parameters[i] and IsCorrectName(j, parameters[i], result_function_text):
-                replacement_text = f"x[{i}]"
-                result_function_text = result_function_text[:j] + replacement_text + result_function_text[j+len(parameters[i]):]
-                j += len(replacement_text) - len(parameters[i])
-            j += 1
-    return result_function_text
-
-
 def IsUniqueName(name, ignore):
     if variables != ignore and name in variables.keys():
         return False
@@ -400,8 +389,8 @@ while True:
                     parameters = [x.strip() for x in prompt[prompt.find("(")+1:FindClosingParenthesis(prompt, prompt.find("("))].split(",")]
                     if "" in parameters:
                         parameters.remove("")
-                    value = ParseFunctionParameters(prompt[prompt.find("=")+1:].strip(), parameters)
-                    functions[name] = Function(value)
+                    value = prompt[prompt.find("=")+1:].strip()
+                    functions[name] = Function(value, parameters)
                     print(f"Function {name} created with value {value}")
                 else:
                     print("Name is already in use")
@@ -431,8 +420,8 @@ while True:
                             parameters = [x.strip() for x in prompt[prompt.find("(")+1:FindClosingParenthesis(prompt, prompt.find("("))].split(",")]
                             if "" in parameters:
                                 parameters.remove("")
-                            value = ParseFunctionParameters(prompt[prompt.find("=")+1:].strip(), parameters)
-                            objects[name].static_functions[function] = Function(value)
+                            value = prompt[prompt.find("=")+1:].strip()
+                            objects[name].static_functions[function] = Function(value, parameters)
                             print(f"Static function {function} added to object {name} with value {value}")
                         else:
                             print("Please use a valid name")
@@ -462,8 +451,8 @@ while True:
                             parameters = ["self"]+[x.strip() for x in prompt[prompt.find("(")+1:FindClosingParenthesis(prompt, prompt.find("("))].split(",")]
                             if "" in parameters:
                                 parameters.remove("")
-                            value = ParseFunctionParameters(prompt[prompt.find("=")+1:].strip(), parameters)
-                            objects[name].functions[function] = Function(value)
+                            value = prompt[prompt.find("=")+1:].strip()
+                            objects[name].functions[function] = Function(value, parameters)
                             print(f"Function {function} added to object {name} with value {value}")
                         else:
                             print("Please use a valid name")
@@ -553,7 +542,7 @@ while True:
             print("Variables:\n" + "\n".join([f" -{v} = {variables[v]}" for v in variables.keys()]))
 
         elif prompt == "functions":
-            print("Functions:\n" + "\n".join([f" -{f} = {functions[f].funct}" for f in functions.keys()]))
+            print("Functions:\n" + "\n".join([f" -{f}({', '.join(functions[f].args)}) = {functions[f].funct}" for f in functions.keys()]))
 
         elif prompt == "objects":
             print("Objects:\n" + "\n".join([f" -{o} = {str(objects[o])}" for o in objects.keys()]))
