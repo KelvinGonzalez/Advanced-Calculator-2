@@ -34,7 +34,7 @@ def IsValidName(name):
 def IsCorrectName(start, name, prompt):
     count = len(name)
     i = start-1
-    while i >= 0 and IsValidChar(prompt[i]):
+    while i >= 0 and (IsValidChar(prompt[i]) or prompt[i] == "."):
         count += 1
         i -= 1
     i = start + len(name)
@@ -102,16 +102,39 @@ class Function:
         return Function(self.funct.replace("x", f"({other.funct})"))
 
 
+class ObjectFunctionHelper:
+    def __init__(self, object, function_name, function):
+        self.object = object
+        self.function_name = function_name
+        self.function = function
+
+    def __call__(self, *args):
+        args_string = ", ".join([f"args[{i}]" for i in range(len(args))])
+        return eval(f"self.object.do('{self.function_name}', {args_string})")
+
+    def __repr__(self):
+        return repr(self.function)
+
+    def __str__(self):
+        return str(self.function)
+
+
 class Object:
-    def __init__(self, name, variables=None, functions=None):
+    def __init__(self, name, variables=None, functions=None, static_variables=None, static_functions=None):
         if variables is None:
             variables = []
         if functions is None:
             functions = {}
+        if static_variables is None:
+            static_variables = {}
+        if static_functions is None:
+            static_functions = {}
 
         self.name = name
         self.variables = variables
         self.functions = functions
+        self.static_variables = static_variables
+        self.static_functions = static_functions
 
     def __call__(self, *args):
         if len(args) == len(self.variables):
@@ -123,37 +146,38 @@ class Object:
 
     def __repr__(self):
         functions_copy = {}
+        static_functions_copy = {}
         for key in self.functions.keys():
             functions_copy[key] = Function(self.functions[key].funct.replace('"', '\\"'))
-        return f"Object(\"{self.name}\", {self.variables}, {functions_copy})"
+        for key in self.static_functions.keys():
+            static_functions_copy[key] = Function(self.static_functions[key].funct.replace('"', '\\"'))
+        return f"Object(\"{self.name}\", {self.variables}, {functions_copy}, {self.static_variables}, {static_functions_copy})"
 
     def __str__(self):
         return f"{self.name}({', '.join(self.variables)})"
 
+    def __getattr__(self, item):
+        if item in self.static_variables.keys():
+            return self.get(item)
+        elif item in self.static_functions.keys():
+            return ObjectFunctionHelper(self, item, self.static_functions[item])
+
+    def get(self, name):
+        return self.static_variables.get(name)
+
+    def do(self, name, *args):
+        function = self.static_functions.get(name)
+        if function is None:
+            return None
+        args_string = ", ".join([f"args[{i}]" for i in range(len(args))])
+        return eval(f"function({args_string})")
+
     def API(self):
         api_variables = " -" + ", ".join(self.variables)
         api_functions = "\n".join([f" -{f} = {self.functions[f].funct}" for f in self.functions.keys()])
-        return f"{self.name} API:\n" \
-               f"Variables:\n" \
-               f"{api_variables}\n" \
-               f"Functions:\n" \
-               f"{api_functions}"
-
-
-class ObjectFunctionHelper:
-    def __init__(self, instance, function):
-        self.instance = instance
-        self.function = function
-
-    def __call__(self, *args):
-        args_string = ", ".join([f"args[{i}]" for i in range(len(args))])
-        return eval(f"self.instance.do('{self.function}', {args_string})")
-
-    def __repr__(self):
-        return repr(objects[self.instance.object].functions.get(self.function))
-
-    def __str__(self):
-        return str(objects[self.instance.object].functions.get(self.function))
+        api_static_variables = "\n".join([f" -{v} = {self.static_variables[v]}" for v in self.static_variables.keys()])
+        api_static_functions = "\n".join([f" -{f} = {self.static_functions[f].funct}" for f in self.static_functions.keys()])
+        return f"{self.name} API:" + (f"\nVariables:\n{api_variables}" if len(self.variables) > 0 else "") + (f"\nFunctions:\n{api_functions}" if len(self.functions) > 0 else "") + (f"\nStatic Variables:\n{api_static_variables}" if len(self.static_variables) > 0 else "") + (f"\nStatic Functions:\n{api_static_functions}" if len(self.static_functions) > 0 else "")
 
 
 class Instance:
@@ -168,7 +192,7 @@ class Instance:
         if item in objects[self.object].variables:
             return self.get(item)
         elif item in objects[self.object].functions.keys():
-            return ObjectFunctionHelper(self, item)
+            return ObjectFunctionHelper(self, item, objects[self.object].functions[item])
 
     def get(self, name):
         for i in range(len(objects[self.object].variables)):
@@ -286,6 +310,8 @@ if os.path.isfile("objects.txt"):
     for o in objects.keys():
         for f in objects[o].functions.keys():
             objects[o].functions[f].funct = objects[o].functions[f].funct.replace('\\"', '"')
+        for f in objects[o].static_functions.keys():
+            objects[o].static_functions[f].funct = objects[o].static_functions[f].funct.replace('\\"', '"')
 
 if os.path.isfile("functions.txt"):
     LoadData(functions, "functions.txt")
@@ -322,6 +348,10 @@ def IsUniqueNameInObject(name, object_name, ignore=None):
         return False
     if ignore != "functions" and name in object.functions.keys():
         return False
+    if ignore != "static variables" and name in object.static_variables.keys():
+        return False
+    if ignore != "static functions" and name in object.static_functions.keys():
+        return False
     return True
 
 
@@ -332,8 +362,9 @@ help = "User Manual:\n" \
        " -obj [o]([x])\n" \
        " -obj add [o] var [x]\n" \
        " -obj add [o] funct [f]([x]) = [y]\n" \
-       " -obj remove [o] var [x]\n" \
-       " -obj remove [o] funct [f]\n" \
+       " -obj add [o] staticvar [x] = [y]\n" \
+       " -obj add [o] staticfunct [f]([x]) = [y]\n" \
+       " -obj remove [o] [x/f]\n" \
        " -obj import [o]\n" \
        " -remove [x/f/o]\n" \
        " -variables\n" \
@@ -379,26 +410,55 @@ while True:
 
         elif prompt.startswith("obj "):
             if prompt.startswith("obj add "):
-                if "var " in prompt:
+                if "staticvar " in prompt:
+                    name = prompt[len("obj add "):prompt.find("staticvar ")].strip()
+                    if objects.get(name) is not None:
+                        variable = prompt[prompt.find("var ")+len("var "):prompt.find("=")].strip()
+                        if IsValidName(variable) and IsUniqueNameInObject(variable, name, "static variables"):
+                            value = eval(ParsePrompt(prompt[prompt.find("=") + 1:].strip()))
+                            objects[name].static_variables[variable] = value
+                            print(f"Static variable {variable} with value {str(value)} added to object {name}")
+                        else:
+                            print("Please use a valid name")
+                    else:
+                        print("Object does not exist")
+
+                elif "staticfunct " in prompt:
+                    name = prompt[len("obj add "):prompt.find("staticfunct ")].strip()
+                    if objects.get(name) is not None:
+                        function = prompt[prompt.find("staticfunct ")+len("staticfunct "):prompt.find("(")].strip()
+                        if IsValidName(function) and IsUniqueNameInObject(function, name, "static functions"):
+                            parameters = [x.strip() for x in prompt[prompt.find("(")+1:FindClosingParenthesis(prompt, prompt.find("("))].split(",")]
+                            if "" in parameters:
+                                parameters.remove("")
+                            value = ParseFunctionParameters(prompt[prompt.find("=")+1:].strip(), parameters)
+                            objects[name].static_functions[function] = Function(value)
+                            print(f"Static function {function} added to object {name} with value {value}")
+                        else:
+                            print("Please use a valid name")
+                    else:
+                        print("Object does not exist")
+
+                elif "var " in prompt:
                     name = prompt[len("obj add "):prompt.find("var ")].strip()
-                    if IsValidName(name):
+                    if objects.get(name) is not None:
                         variable = prompt[prompt.find("var ")+len("var "):].strip()
-                        if IsUniqueNameInObject(variable, name):
+                        if IsValidName(variable) and IsUniqueNameInObject(variable, name):
                             objects[name].variables.append(variable)
                             for v in variables.keys():
                                 if type(variables[v]) == Instance and variables[v].object == name:
                                     variables[v].variables.append(None)
                             print(f"Variable {variable} added to object {name}")
                         else:
-                            print("Name is already in use")
+                            print("Please use a valid name")
                     else:
                         print("Object does not exist")
 
                 elif "funct " in prompt:
                     name = prompt[len("obj add "):prompt.find("funct ")].strip()
-                    if IsValidName(name):
+                    if objects.get(name) is not None:
                         function = prompt[prompt.find("funct ")+len("funct "):prompt.find("(")].strip()
-                        if IsUniqueNameInObject(function, name, "functions"):
+                        if IsValidName(function) and IsUniqueNameInObject(function, name, "functions"):
                             parameters = ["self"]+[x.strip() for x in prompt[prompt.find("(")+1:FindClosingParenthesis(prompt, prompt.find("("))].split(",")]
                             if "" in parameters:
                                 parameters.remove("")
@@ -406,7 +466,7 @@ while True:
                             objects[name].functions[function] = Function(value)
                             print(f"Function {function} added to object {name} with value {value}")
                         else:
-                            print("Name is already in use")
+                            print("Please use a valid name")
                     else:
                         print("Object does not exist")
 
@@ -414,28 +474,41 @@ while True:
                     print("Only variables or functions can be added to an object")
 
             elif prompt.startswith("obj remove "):
-                if "var " in prompt:
-                    name = prompt[len("obj remove "):prompt.find("var ")].strip()
-                    variable = prompt[prompt.find("var ") + len("var "):].strip()
+                remove_bits = prompt[len("obj remove "):].split(" ")
+                while "" in remove_bits:
+                    remove_bits.remove("")
+                if len(remove_bits) != 2:
+                    print("Invalid removal selection")
+                    continue
+                if objects.get(remove_bits[0]) is None:
+                    print(f"Object {remove_bits[0]} does not exist")
+
+                if remove_bits[1] in objects[remove_bits[0]].variables:
                     index = -1
-                    for i in range(len(objects[name].variables)):
-                        if objects[name].variables[i] == variable:
+                    for i in range(len(objects[remove_bits[0]].variables)):
+                        if objects[remove_bits[0]].variables[i] == remove_bits[1]:
                             index = i
                             break
                     for v in variables.keys():
-                        if type(variables[v]) == Instance and variables[v].object == name:
+                        if type(variables[v]) == Instance and variables[v].object == remove_bits[0]:
                             variables[v].variables.pop(index)
-                    objects[name].variables.remove(variable)
-                    print(f"Variable {variable} removed from object {name}")
+                    objects[remove_bits[0]].variables.remove(remove_bits[1])
+                    print(f"Variable {remove_bits[1]} removed from object {remove_bits[0]}")
 
-                elif "funct " in prompt:
-                    name = prompt[len("obj remove "):prompt.find("funct ")].strip()
-                    function = prompt[prompt.find("funct ") + len("funct "):].strip()
-                    objects[name].functions.pop(function)
-                    print(f"Function {function} removed from object {name}")
+                elif remove_bits[1] in objects[remove_bits[0]].functions.keys():
+                    objects[remove_bits[0]].functions.pop(remove_bits[1])
+                    print(f"Function {remove_bits[1]} removed from object {remove_bits[0]}")
+
+                elif remove_bits[1] in objects[remove_bits[0]].static_variables.keys():
+                    objects[remove_bits[0]].static_variables.pop(remove_bits[1])
+                    print(f"Static variable {remove_bits[1]} removed from object {remove_bits[0]}")
+
+                elif remove_bits[1] in objects[remove_bits[0]].static_functions.keys():
+                    objects[remove_bits[0]].static_functions.pop(remove_bits[1])
+                    print(f"Static function {remove_bits[1]} removed from object {remove_bits[0]}")
 
                 else:
-                    print("Only variables or functions can be removed from an object")
+                    print(f"Could not find property {remove_bits[1]} in object {remove_bits[0]}")
 
             elif prompt.startswith("obj import "):
                 value = eval(prompt[len("obj import "):].strip())
@@ -450,6 +523,8 @@ while True:
                 if IsValidName(name):
                     if IsUniqueName(name, objects):
                         attributes = [x.strip() for x in prompt[prompt.find("(")+1:FindClosingParenthesis(prompt, prompt.find("("))].split(",")]
+                        if "" in attributes:
+                            attributes.remove("")
                         objects[name] = Object(name, attributes)
                         print(f"Object {name} created as {str(objects[name])}")
                     else:
@@ -458,7 +533,7 @@ while True:
                     print("Please use a valid name")
 
         elif prompt.startswith("remove "):
-            name = prompt[len("remove "):]
+            name = prompt[len("remove "):].strip()
             if name in variables.keys():
                 variables.pop(name)
                 print(f"Variable {name} removed")
@@ -466,8 +541,11 @@ while True:
                 functions.pop(name)
                 print(f"Function {name} removed")
             elif name in objects.keys():
+                for v in list(variables.keys()):
+                    if type(variables[v]) == Instance and variables[v].object == name:
+                        variables.pop(v)
                 objects.pop(name)
-                print(f"Object {name} removed")
+                print(f"Object {name} removed and any variables of that type")
             else:
                 print("No such thing stored with that name")
 
