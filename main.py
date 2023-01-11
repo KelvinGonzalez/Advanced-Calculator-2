@@ -4,6 +4,9 @@ import os
 objects = {}
 functions = {}
 variables = {}
+temp_variables = {}
+
+ans = []
 
 
 def FindClosingParenthesis(text, index, starter="(", ender=")"):
@@ -70,6 +73,14 @@ def ParsePrompt(prompt):
                 result_prompt = result_prompt[:i] + replacement_text + result_prompt[i+len(v):]
                 i += len(replacement_text) - len(v)
             i += 1
+    for tv in temp_variables.keys():
+        i = 0
+        while i < len(result_prompt):
+            if result_prompt[i:i+len(tv)] == tv and IsCorrectName(i, tv, result_prompt):
+                replacement_text = f"temp_variables[\"{tv}\"]"
+                result_prompt = result_prompt[:i] + replacement_text + result_prompt[i+len(tv):]
+                i += len(replacement_text) - len(tv)
+            i += 1
     return result_prompt
 
 
@@ -98,7 +109,8 @@ class Function:
         return eval(ParsePrompt(ParseFunctionParameters(self.funct, self.args)))
 
     def __repr__(self):
-        return f"Function(\"{self.funct}\", {self.args})"
+        temp_funct = self.funct.replace('"', '\\"')
+        return f"Function(\"{temp_funct}\", {self.args})"
 
     def __str__(self):
         return f"f({', '.join(self.args)}) = {self.funct}"
@@ -147,13 +159,7 @@ class Object:
             return Instance(self.name, list(args)[:len(self.variables)])
 
     def __repr__(self):
-        functions_copy = {}
-        static_functions_copy = {}
-        for key in self.functions.keys():
-            functions_copy[key] = Function(self.functions[key].funct.replace('"', '\\"'), self.functions[key].args)
-        for key in self.static_functions.keys():
-            static_functions_copy[key] = Function(self.static_functions[key].funct.replace('"', '\\"'), self.static_functions[key].args)
-        return f"Object(\"{self.name}\", {self.variables}, {functions_copy}, {self.static_variables}, {static_functions_copy})"
+        return f"Object(\"{self.name}\", {self.variables}, {self.functions}, {self.static_variables}, {self.static_functions})"
 
     def __str__(self):
         return f"{self.name}({', '.join(self.variables)})"
@@ -221,6 +227,10 @@ class Instance:
         if objects[self.object].functions.get("add") is None:
             return None
         return objects[self.object].functions["add"](self, other)
+    def __radd__(self, other):
+        if objects[self.object].functions.get("add") is None:
+            return None
+        return objects[self.object].functions["add"](self, other)
 
     def __sub__(self, other):
         if objects[self.object].functions.get("sub") is None:
@@ -228,6 +238,10 @@ class Instance:
         return objects[self.object].functions["sub"](self, other)
 
     def __mul__(self, other):
+        if objects[self.object].functions.get("mul") is None:
+            return None
+        return objects[self.object].functions["mul"](self, other)
+    def __rmul__(self, other):
         if objects[self.object].functions.get("mul") is None:
             return None
         return objects[self.object].functions["mul"](self, other)
@@ -251,19 +265,14 @@ class Instance:
         if objects[self.object].functions.get("cmp") is None:
             return None
         return objects[self.object].functions["cmp"](self, other)
-
     def __eq__(self, other):
         return self.__cmp__(other) == 0
-
     def __lt__(self, other):
         return self.__cmp__(other) < 0
-
     def __gt__(self, other):
         return self.__cmp__(other) > 0
-
     def __le__(self, other):
         return self < other or self == other
-
     def __ge__(self, other):
         return self > other or self == other
 
@@ -286,6 +295,21 @@ class Instance:
         if objects[self.object].functions.get("len") is None:
             return None
         return objects[self.object].functions["len"](self)
+    
+    def __getitem__(self, key):
+        if objects[self.object].functions.get("getitem") is None:
+            return None
+        return objects[self.object].functions["getitem"](self, key)
+
+    def __getslice__(self, i, j):
+        if objects[self.object].functions.get("getslice") is None:
+            return None
+        return objects[self.object].functions["getslice"](self, i, j)
+
+    def __contains__(self, obj):
+        if objects[self.object].functions.get("contains") is None:
+            return None
+        return objects[self.object].functions["contains"](self, obj)
 
     def __call__(self, *args):
         if objects[self.object].functions.get("call") is None:
@@ -317,6 +341,8 @@ if os.path.isfile("objects.txt"):
 
 if os.path.isfile("functions.txt"):
     LoadData(functions, "functions.txt")
+    for f in functions.keys():
+        functions[f].funct = functions[f].funct.replace('\\"', '"')
 if os.path.isfile("variables.txt"):
     LoadData(variables, "variables.txt")
 
@@ -327,6 +353,8 @@ def IsUniqueName(name, ignore):
     if functions != ignore and name in functions.keys():
         return False
     if objects != ignore and name in objects.keys():
+        return False
+    if temp_variables != ignore and name in temp_variables.keys():
         return False
     return True
 
@@ -347,6 +375,7 @@ def IsUniqueNameInObject(name, object_name, ignore=None):
 help = "User Manual:\n" \
        " -[expression] = [result]\n" \
        " -var [x] = [y]\n" \
+       " -tempvar [x] = [y]\n" \
        " -funct [f]([x]) = [y]\n" \
        " -obj [o]([x])\n" \
        " -obj add [o] var [x]\n" \
@@ -358,7 +387,8 @@ help = "User Manual:\n" \
        " -remove [x/f/o]\n" \
        " -variables\n" \
        " -functions\n" \
-       " -objects \n" \
+       " -objects\n" \
+       " -results\n" \
        " -save\n" \
        " -exit"
 print(help)
@@ -377,6 +407,21 @@ while True:
                         continue
                     variables[data[0].strip()] = value
                     print(f"Variable {data[0].strip()} created with value {str(value)}")
+                else:
+                    print("Name is already in use")
+            else:
+                print("Please use a valid name")
+
+        elif prompt.startswith("tempvar "):
+            data = prompt[len("tempvar "):].split("=")
+            if IsValidName(data[0].strip()):
+                if IsUniqueName(data[0].strip(), temp_variables):
+                    value = eval(ParsePrompt(data[1].strip()))
+                    if type(value) == Function or type(value) == Object:
+                        print("Variables cannot be of type Function or Object")
+                        continue
+                    temp_variables[data[0].strip()] = value
+                    print(f"Temporary variable {data[0].strip()} created with value {str(value)}")
                 else:
                     print("Name is already in use")
             else:
@@ -522,30 +567,36 @@ while True:
                     print("Please use a valid name")
 
         elif prompt.startswith("remove "):
-            name = prompt[len("remove "):].strip()
-            if name in variables.keys():
-                variables.pop(name)
-                print(f"Variable {name} removed")
-            elif name in functions.keys():
-                functions.pop(name)
-                print(f"Function {name} removed")
-            elif name in objects.keys():
-                for v in list(variables.keys()):
-                    if type(variables[v]) == Instance and variables[v].object == name:
-                        variables.pop(v)
-                objects.pop(name)
-                print(f"Object {name} removed and any variables of that type")
-            else:
-                print("No such thing stored with that name")
+            for name in [x.strip() for x in prompt[len("remove "):].strip().split(" ")]:
+                if name in variables.keys():
+                    variables.pop(name)
+                    print(f"Variable {name} removed")
+                elif name in functions.keys():
+                    functions.pop(name)
+                    print(f"Function {name} removed")
+                elif name in objects.keys():
+                    for v in list(variables.keys()):
+                        if type(variables[v]) == Instance and variables[v].object == name:
+                            variables.pop(v)
+                    objects.pop(name)
+                    print(f"Object {name} removed and any variables of that type")
+                elif name in temp_variables.keys():
+                    temp_variables.pop(name)
+                    print(f"Temporary variable {name} removed")
+                else:
+                    print(f"No such thing stored with name {name}")
 
         elif prompt == "variables":
-            print("Variables:\n" + "\n".join([f" -{v} = {variables[v]}" for v in variables.keys()]))
+            print("Variables:\n" + "\n".join([f" -{v} = {str(variables[v])}" for v in variables.keys()]) + ("\nTemp Variables:\n" + "\n".join([f" -{tv} = {str(temp_variables[tv])}" for tv in temp_variables.keys()]) if len(temp_variables) > 0 else ""))
 
         elif prompt == "functions":
-            print("Functions:\n" + "\n".join([f" -{f}({', '.join(functions[f].args)}) = {functions[f].funct}" for f in functions.keys()]))
+            print("Functions:\n" + "\n".join([f" -{f}({', '.join(functions[f].args)}) = {str(functions[f].funct)}" for f in functions.keys()]))
 
         elif prompt == "objects":
             print("Objects:\n" + "\n".join([f" -{o} = {str(objects[o])}" for o in objects.keys()]))
+
+        elif prompt == "results":
+            print("Results:\n" + "\n".join([f" -{i}: {str(ans[i])}" for i in range(len(ans))]))
 
         elif prompt.strip() == "":
             continue
@@ -564,7 +615,10 @@ while True:
             break
 
         else:
-            print(f"Result: {str(eval(ParsePrompt(prompt)))}")
+            if len(ans) >= 10:
+                ans.pop()
+            ans.insert(0, eval(ParsePrompt(prompt)))
+            print(f"Result: {str(ans[0])}")
 
     except:
         print("Something went wrong")
